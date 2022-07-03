@@ -34,6 +34,8 @@ using namespace std;
 #include <pcl/registration/icp.h>
 #include <pcl/registration/ndt.h>
 #include <pcl/console/time.h>   // TicToc
+#include <stdio.h>
+#include <stdlib.h>
 
 PointCloudT pclCloud;
 cc::Vehicle::Control control;
@@ -47,16 +49,26 @@ void keyboardEventOccurred(const pcl::visualization::KeyboardEvent &event, void*
   	//boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer = *static_cast<boost::shared_ptr<pcl::visualization::PCLVisualizer> *>(viewer_void);
 	if (event.getKeySym() == "Right" && event.keyDown()){
 		cs.push_back(ControlState(0, -0.02, 0));
+		printf("Right turn\n");
   	}
 	else if (event.getKeySym() == "Left" && event.keyDown()){
 		cs.push_back(ControlState(0, 0.02, 0)); 
+		printf("Left turn\n");
   	}
   	if (event.getKeySym() == "Up" && event.keyDown()){
 		cs.push_back(ControlState(0.1, 0, 0));
+		printf("Speed Up\n");
   	}
 	else if (event.getKeySym() == "Down" && event.keyDown()){
 		cs.push_back(ControlState(-0.1, 0, 0)); 
+		printf("Speed Down\n");
   	}
+	else if (event.getKeySym() == "l" && event.keyDown()){
+		//added key "g" to default to speed "3"
+		//had issues with gui not always registerting key presses well
+		cs.push_back(ControlState(0.3, 0, 0));
+		printf("Jumping to 3\n");
+  	}	  
 	if(event.getKeySym() == "a" && event.keyDown()){
 		refresh_view = true;
 	}
@@ -99,7 +111,96 @@ void drawCar(Pose pose, int num, Color color, double alpha, pcl::visualization::
 	renderBox(viewer, box, num, color, alpha);
 }
 
-int main(){
+Eigen::Matrix4d ICP(PointCloudT::Ptr target, PointCloudT::Ptr source, Pose startingPose, int iterations){
+	//See sm1-main.cpp for refernces and sources
+	Eigen::Matrix4d initTransform = transform3D(startingPose.rotation.yaw,
+											startingPose.rotation.pitch,
+											startingPose.rotation.roll,
+											startingPose.position.x,
+											startingPose.position.y,
+											startingPose.position.z);
+	PointCloudT::Ptr transformSource(new PointCloudT);
+	pcl::transformPointCloud(*source, *transformSource, initTransform);
+
+	//See PCL docs and examples
+
+	pcl::console::TicToc time;
+	time.tic();
+	pcl::IterativeClosestPoint<PointT, PointT> icp;
+
+	//adjust meta params
+	icp.setMaximumIterations(iterations);
+	icp.setInputSource(transformSource);
+	icp.setInputTarget(target);
+	icp.setMaxCorrespondenceDistance(2);
+	//can adjust other converagance ciriteria
+	//setEuclideanFitnessEpisol, TransfoomationEpisoln
+
+	PointCloudT::Ptr cloud_icp (new PointCloudT);
+	icp.align(*cloud_icp);
+
+	if(!icp.hasConverged()) {
+		cerr << "ICP DID NOT CONVERAGE!!!!!!" << endl;
+		return Eigen::Matrix4d::Identity ();
+	}
+
+	return icp.getFinalTransformation().cast<double>() * initTransform;
+}
+
+Eigen::Matrix4d NDT(pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt, PointCloudT::Ptr source, Pose startingPose, int iterations){
+	//see sm2-main.cpp for ref
+	pcl::console::TicToc time;
+	time.tic ();
+
+	Eigen::Matrix4f init_guess = transform3D(startingPose.rotation.yaw, startingPose.rotation.pitch, startingPose.rotation.roll, startingPose.position.x, startingPose.position.y, startingPose.position.z).cast<float>();
+	
+	ndt.setMaximumIterations(iterations);
+	ndt.setInputSource(source);
+
+	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_ndt(new pcl::PointCloud<pcl::PointXYZ>);
+	ndt.align(*cloud_ndt, init_guess);
+
+	if(!ndt.hasConverged()) {
+		cerr << "Failed to converage NDT" << endl;
+		return Eigen::Matrix4d::Identity();
+	}
+
+  	return ndt.getFinalTransformation().cast<double>();
+}
+
+int main(int argc, char **argv){
+
+	//Tuning values - can adjust these at compile time to change behavior
+	//todo make them CLI in future?
+	bool useIcp = false;
+	int iterations = 10;
+	double leafSize = 1.0; //0.1 in example 0.5 in ref code
+	printf("start of main\n");
+	if(argc == 4) {
+		if(strcmp("ndt", argv[1]) == 0) {
+			useIcp = false;
+		} 
+		else if(strcmp("icp", argv[1]) == 0) {
+			useIcp = true;
+		}
+		else {
+			printf("Invalid arg %s\n", argv[1]);
+			return -1;
+		}
+		
+		iterations = atoi(argv[2]);
+		leafSize = atof(argv[3]);
+	}
+
+	else if(argc == 1) {
+		//use defaults
+	} 
+	else {
+		printf("Please use 0 or ./cloud_loc <algo> <iterations> <leaf>");
+	}
+
+	printf("arg parse done\n");
+	printf("Using icp=%d, iter=%d, leaf=%f\n", useIcp, iterations, leafSize);
 
 	auto client = cc::Client("localhost", 2000);
 	client.SetTimeout(2s);
@@ -144,6 +245,17 @@ int main(){
 
 	typename pcl::PointCloud<PointT>::Ptr cloudFiltered (new pcl::PointCloud<PointT>);
 	typename pcl::PointCloud<PointT>::Ptr scanCloud (new pcl::PointCloud<PointT>);
+
+	//Create NDT
+	pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt;
+	//TODO: Set resolution and point cloud target (map) for ndt
+	// ......
+
+	ndt.setTransformationEpsilon(0.0001);
+	ndt.setStepSize(0.1);
+	ndt.setResolution(1);
+	ndt.setInputTarget(mapCloud);
+
 
 	lidar->Listen([&new_scan, &lastScanTime, &scanCloud](auto data){
 
@@ -196,20 +308,37 @@ int main(){
 		}
 
   		viewer->spinOnce ();
-		
+	
+
 		if(!new_scan){
 			
 			new_scan = true;
-			// TODO: (Filter scan using voxel filter)
+			//https://pcl.readthedocs.io/projects/tutorials/en/latest/voxel_grid.html
+			//TODO: Create voxel filter for input scan and save to cloudFiltered
+			// ......
+			pcl::VoxelGrid<PointT> sor;
+			sor.setInputCloud(scanCloud);
+			sor.setLeafSize(leafSize, leafSize, leafSize);
+			sor.filter(*cloudFiltered);
 
 			// TODO: Find pose transform by using ICP or NDT matching
-			//pose = ....
+			Eigen::Matrix4d transform = transform3D(pose.rotation.yaw, pose.rotation.pitch, pose.rotation.roll, pose.position.x, pose.position.y, pose.position.z);
+			PointCloudT::Ptr transformed_scan (new PointCloudT); //output scan
+
+			if(useIcp) {
+				transform = ICP(mapCloud, cloudFiltered, pose, iterations);
+			} else {
+				transform = NDT(ndt, cloudFiltered, pose, iterations);
+			}
+			pose = getPose(transform);
 
 			// TODO: Transform scan so it aligns with ego's actual pose and render that scan
+			pcl::transformPointCloud (*cloudFiltered, *transformed_scan, transform);
 
 			viewer->removePointCloud("scan");
 			// TODO: Change `scanCloud` below to your transformed scan
-			renderPointCloud(viewer, scanCloud, "scan", Color(1,0,0) );
+			//renderPointCloud(viewer, scanCloud, "scan", Color(1,0,0) );
+			renderPointCloud(viewer, transformed_scan, "scan", Color(1,0,0) );
 
 			viewer->removeAllShapes();
 			drawCar(pose, 1,  Color(0,1,0), 0.35, viewer);
@@ -218,13 +347,27 @@ int main(){
 			if(poseError > maxError)
 				maxError = poseError;
 			double distDriven = sqrt( (truePose.position.x) * (truePose.position.x) + (truePose.position.y) * (truePose.position.y) );
-			viewer->removeShape("maxE");
-			viewer->addText("Max Error: "+to_string(maxError)+" m", 200, 100, 32, 1.0, 1.0, 1.0, "maxE",0);
-			viewer->removeShape("derror");
-			viewer->addText("Pose error: "+to_string(poseError)+" m", 200, 150, 32, 1.0, 1.0, 1.0, "derror",0);
-			viewer->removeShape("dist");
-			viewer->addText("Distance: "+to_string(distDriven)+" m", 200, 200, 32, 1.0, 1.0, 1.0, "dist",0);
 
+
+			viewer->removeShape("iter");
+			viewer->addText("Iterations: "+to_string(iterations), 50, 80, 20, 1.0, 1.0, 1.0, "iter",0);
+			viewer->removeShape("leaf");
+			viewer->addText("Voxel Leaf Size: "+to_string(leafSize), 50, 110, 20, 1.0, 1.0, 1.0, "leaf",0);			
+			viewer->removeShape("algo");
+			if(useIcp) {
+				viewer->addText("Algo: ICP", 50, 140, 20, 1.0, 1.0, 1.0, "algo",0);
+			} 
+			else {
+				viewer->addText("Algo: NDT", 50, 140, 20, 1.0, 1.0, 1.0, "algo",0);
+			}
+
+			viewer->removeShape("maxE");
+			viewer->addText("Max Error: "+to_string(maxError)+" m", 50, 170, 20, 1.0, 1.0, 1.0, "maxE",0);
+			viewer->removeShape("derror");
+			viewer->addText("Pose error: "+to_string(poseError)+" m", 50, 200, 20, 1.0, 1.0, 1.0, "derror",0);
+			viewer->removeShape("dist");
+			viewer->addText("Distance: "+to_string(distDriven)+" m", 50, 230, 20, 1.0, 1.0, 1.0, "dist",0);
+			
 			if(maxError > 1.2 || distDriven >= 170.0 ){
 				viewer->removeShape("eval");
 			if(maxError > 1.2){
@@ -240,3 +383,6 @@ int main(){
   	}
 	return 0;
 }
+
+
+
