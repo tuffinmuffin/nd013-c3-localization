@@ -22,16 +22,22 @@ How to Run
 ----------
 The application mostly follows the usage given by course.
 
+Support Libs and example refernces should be extracted from support-libs.zip
+
+extract support libs (or copy the c3-main.cpp file as this is only file with updates)
+```
+    gunzip support-libs.zip
+```
 
 Configure
-.. code-block:: shell
-
+```
     cmake .
+```
 
 Compile
-.. code-block:: shell
-
+```
     make
+```
 
 Run Simulator
 .. code-block:: shell
@@ -45,16 +51,17 @@ Running it without paremters pick the "defaults"
 
 Running with the the following sytnax allows paramters to change. The CLI parser is very crude and will not tolerate deviation.
 
-.. code-block:: shell
-
+```
     ./cloud_loc <algo> <iterations> <leaf size>
+```
 
 Where
 * **<algo>** is either 'ndt' or 'icp"
 * **<iterations>** is an integer for number of iterations to run algo
 * **<leaf size>** is a floating point value for leaf size
 
-Adding this simnple CLI allowed much faster attempts on values.
+Adding this simnple CLI allowed much faster attempts on values. In addition to the above added CLI interface the data presentation
+was changed to also present the critical tuned values. This helped with keeping data collection simpler
 
 
 ----------
@@ -72,10 +79,13 @@ Some high speeds or extereme paramers would also lose all tracking and no furthe
 
 I found a good set of parameters uing NCP with a leaf size of 0.7 and 4 iterations. The resulted in a very low error and seemed to meet the requirments for the project.
 
+```
+    ./cloud_loc ndt 4 0.7
+```
+
 ![Good NDT](c3-project/images/ndt_leaf0.7_itr4_speed3.png)
 
 In the image I also inlcuded the shell output showing my debug statments for tracking key presses. As shown this was taken at speed 3.
-
 
 One issue appeared to be the speed of the simulator. It appeared the simulator required more resources than the VMs really could provide.
 
@@ -84,10 +94,27 @@ One snapshop (which was fairly consistent) is the simulator took up 2 total CPUs
 Snaptop of CPU usage. When running ICP the CPU usage was higher in the matching app than using NDT.
 
 
-I never found a totally successful ICP image after burning around 2 hours of GPU. The following figure annoates an area of the map that ICP seemed to struggle with. Quite often when entering this zone the pose error would exceed 1.2 briefly then quickly fall back down to errors of <0.5 meters. As seen in the image below the final pose error was 0.399 meters at 177 meters.
+ICP was finicky. There was one region of the map it generally did not perform well on. Even with a very good final result the section marked on the map bellow seemed to provide challenges.
 
 ![Bad ICP](c3-project/images/icp_leaf0.1_itr30_speed3.png)
 
 
+A good version of IPC was found with ICP iterations 30, leaf size 0.2
+
+```
+./cloud_loc icp 30 0.2
+```
+![Good ICP](c3-project/images/icp_leaf0.2_itr30_speed3.png)
 
 
+As you can see from the 2 ICPs above the only change between is leaf size to pass vs fail.
+
+
+
+
+# Conclision
+Using either algorithm presented in this course can work both worked well and had diffrent areas they seemed to perform well in.
+
+A passing NDT and ICP was shown above that met the reqs of <1.2 meter error over 170 meters travel.
+
+The simulation speed vs how the algorithm would perform was hard to seperate. The simulation did not appear to be real time and the algorithm is being run on provided hardware instead of target hardware. Moving this to a real time system would need a more disciplened way of comparing real run time performance.
